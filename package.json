@@ -1,9 +1,9 @@
 {
   "name": "@lifeomic/kms-crypt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Encrypt and decrypt objects with keys from KMS.",
-  "main": "dist/index.js",
   "license": "MIT",
+  "main": "dist/index.js",
   "files": [
     "dist"
   ],
@@ -16,10 +16,11 @@
     "build:src": "babel src --extensions '.ts' --out-dir dist",
     "build:types": "tsc --project tsconfig.json --declaration --emitDeclarationOnly",
     "lint": "tslint --project .",
-    "test": "jest"
+    "test": "jest",
+    "prepublish": "yarn build"
   },
-  "peerDependencies": {
-    "aws-sdk": "^2.466.0"
+  "dependencies": {
+    "aws-sdk": "^2"
   },
   "devDependencies": {
     "@babel/cli": "^7.4.4",
@@ -28,7 +29,6 @@
     "@babel/preset-typescript": "^7.3.3",
     "@types/jest": "^24.0.13",
     "@types/node": "^12.0.4",
-    "aws-sdk": "^2.466.0",
     "jest": "^24.8.0",
     "prettier": "^1.17.1",
     "ts-jest": "^24.0.2",

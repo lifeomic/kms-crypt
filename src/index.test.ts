@@ -1,7 +1,16 @@
-import { KMS } from "aws-sdk";
 import { encrypt, decrypt, encryptObject, decryptObject } from "./index";
 
 import { EncryptRequest, EncryptObjectRequest, Encrypted } from "./types";
+
+let mockKMS: any;
+
+jest.mock('aws-sdk', () => {
+  return {
+    KMS: jest.fn().mockImplementation(() => {
+      return mockKMS;
+    })
+  }
+})
 
 // Data cipher text that resolves to: { a: 'b' }
 const validDataCipherText = Buffer.from([
@@ -41,12 +50,11 @@ test("should be able to encrypt data", async () => {
     Plaintext: Buffer.from("world"),
   });
 
-  const mockKmsClient = {
+  mockKMS = {
     generateDataKey: createAwsPromiseReturnStub(generateDataKeyStub),
   };
 
   const encrypted = await encrypt(
-    (mockKmsClient as unknown) as KMS,
     {
       algorithm: "aes256",
       kmsKeyId: "abc",
@@ -69,12 +77,11 @@ test("should be able to encrypt an object", async () => {
     Plaintext: Buffer.from("world"),
   });
 
-  const mockKmsClient = {
+  mockKMS = {
     generateDataKey: createAwsPromiseReturnStub(generateDataKeyStub),
   };
 
   const encrypted = await encryptObject(
-    (mockKmsClient as unknown) as KMS,
     {
       algorithm: "aes256",
       kmsKeyId: "abc",
@@ -98,11 +105,11 @@ test("should be able to decrypt to a buffer", async () => {
     Plaintext: Buffer.from("world"),
   });
 
-  const mockKmsClient = {
+  mockKMS = {
     decrypt: createAwsPromiseReturnStub(decryptStub),
   };
 
-  const decrypted = await decrypt((mockKmsClient as unknown) as KMS, {
+  const decrypted = await decrypt({
     algorithm: "aes256",
     keyCiphertext,
     dataCiphertext: validDataCipherText,
@@ -121,11 +128,11 @@ test("should be able to decrypt an object", async () => {
     Plaintext: Buffer.from("world"),
   });
 
-  const mockKmsClient = {
+  mockKMS = {
     decrypt: createAwsPromiseReturnStub(decryptStub),
   };
 
-  const decrypted = await decryptObject((mockKmsClient as unknown) as KMS, {
+  const decrypted = await decryptObject({
     algorithm: "aes256",
     keyCiphertext,
     dataCiphertext: validDataCipherText,

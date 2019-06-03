@@ -1,11 +1,9 @@
 import { KMS } from "aws-sdk";
 import * as crypto from "crypto";
 
-import {
-  Encrypted,
-  EncryptObjectRequest,
-  EncryptRequest
-} from "./types";
+import { Encrypted, EncryptObjectRequest, EncryptRequest } from "./types";
+
+export * from './types';
 
 /**
  * Encrypts data using a KMS data encryption key
@@ -13,9 +11,10 @@ import {
  * @param encryptRequest
  */
 export async function encrypt(
-  kms: KMS,
   encryptRequest: EncryptRequest,
+  config?: KMS.Types.ClientConfiguration,
 ): Promise<Encrypted> {
+  const kms = new KMS(config);
   const { kmsKeyId, algorithm } = encryptRequest;
 
   const dataKeyResponse = await kms
@@ -48,14 +47,17 @@ export async function encrypt(
  * @param encryptRequest
  */
 export async function encryptObject(
-  kms: KMS,
   encryptRequest: EncryptObjectRequest,
+  config?: KMS.Types.ClientConfiguration,
 ) {
-  return encrypt(kms, {
-    data: Buffer.from(JSON.stringify(encryptRequest.data), "utf8"),
-    kmsKeyId: encryptRequest.kmsKeyId,
-    algorithm: encryptRequest.algorithm,
-  });
+  return encrypt(
+    {
+      data: Buffer.from(JSON.stringify(encryptRequest.data), "utf8"),
+      kmsKeyId: encryptRequest.kmsKeyId,
+      algorithm: encryptRequest.algorithm,
+    },
+    config,
+  );
 }
 
 /**
@@ -63,7 +65,11 @@ export async function encryptObject(
  * @param kms
  * @param encrypted
  */
-export async function decrypt(kms: KMS, encrypted: Encrypted): Promise<Buffer> {
+export async function decrypt(
+  encrypted: Encrypted,
+  config?: KMS.Types.ClientConfiguration,
+): Promise<Buffer> {
+  const kms = new KMS(config);
   const decryptResponse = await kms
     .decrypt({
       CiphertextBlob: encrypted.keyCiphertext,
@@ -87,7 +93,10 @@ export async function decrypt(kms: KMS, encrypted: Encrypted): Promise<Buffer> {
  * @param kms
  * @param encrypted
  */
-export async function decryptObject<T = any>(kms: KMS, encrypted: Encrypted) {
-  const decrypted = await decrypt(kms, encrypted);
+export async function decryptObject<T = any>(
+  encrypted: Encrypted,
+  config?: KMS.Types.ClientConfiguration,
+) {
+  const decrypted = await decrypt(encrypted, config);
   return JSON.parse(decrypted.toString("utf8")) as T;
 }
