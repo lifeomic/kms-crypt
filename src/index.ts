@@ -1,9 +1,51 @@
 import { KMS } from "aws-sdk";
 import * as crypto from "crypto";
-
+import { pbkdf2Async } from './crypto';
 import { Encrypted, EncryptObjectRequest, EncryptRequest } from "./types";
 
 export * from './types';
+
+interface DecryptUsingTargetedDecipherMethodParams {
+  algorithm: string;
+  password: string;
+  dataCiphertext: Buffer
+}
+
+const INITIALIZATION_VECTOR_SIZE = 16;
+
+/**
+ * Decrypts using `createDecipheriv` or `createDecipher` based on whether we
+ * detected an initialization vector. Allows for backwards compatibility in
+ * existing encrypted data.
+ *
+ * @param params {DecryptUsingTargetedDecipherMethodParams}
+ */
+async function decryptUsingTargetedDecipherMethod (
+  params: DecryptUsingTargetedDecipherMethodParams
+) {
+  const { algorithm, password, dataCiphertext } = params;
+  const charIndexAfterInitializationVector = INITIALIZATION_VECTOR_SIZE + 1;
+
+  if (dataCiphertext.slice(INITIALIZATION_VECTOR_SIZE, charIndexAfterInitializationVector).toString() === ':') {
+    const initializationVector = dataCiphertext.slice(0, INITIALIZATION_VECTOR_SIZE);
+
+    const toDecipher = await pbkdf2Async(password, initializationVector);
+    const decipher = crypto.createDecipheriv(algorithm, toDecipher, initializationVector);
+
+    return Buffer.concat([
+      decipher.update(dataCiphertext.slice(charIndexAfterInitializationVector)),
+      decipher.final()
+    ]);
+  } else {
+    /* tslint:disable-next-line:deprecation */
+    const decipher = crypto.createDecipher(algorithm, password);
+
+    return Buffer.concat([
+      decipher.update(dataCiphertext),
+      decipher.final()
+    ]);
+  }
+}
 
 /**
  * Encrypts data using a KMS data encryption key
@@ -26,12 +68,16 @@ export async function encrypt(
 
   const keyCiphertext = dataKeyResponse.CiphertextBlob as Buffer;
   const password = dataKeyResponse.Plaintext as string;
-  /* tslint:disable-next-line:deprecation */
-  const cipher = crypto.createCipher(algorithm, password);
+  const initializationVector = crypto.randomBytes(INITIALIZATION_VECTOR_SIZE);
+
+  const key = await pbkdf2Async(password, initializationVector);
+  const cipher = crypto.createCipheriv(algorithm, key, initializationVector);
 
   const dataCiphertext = Buffer.concat([
-    cipher.update(encryptRequest.data),
-    cipher.final(),
+    initializationVector,
+    Buffer.from(':'),
+    cipher.update(Buffer.from(encryptRequest.data)),
+    cipher.final()
   ]);
 
   return {
@@ -78,14 +124,11 @@ export async function decrypt(
 
   const password = decryptResponse.Plaintext as string;
 
-  // We'll be decrypting the data using the password
-  /* tslint:disable-next-line:deprecation */
-  const decipher = crypto.createDecipher(encrypted.algorithm, password);
-
-  return Buffer.concat([
-    decipher.update(encrypted.dataCiphertext),
-    decipher.final(),
-  ]);
+  return decryptUsingTargetedDecipherMethod({
+    algorithm: encrypted.algorithm,
+    dataCiphertext: encrypted.dataCiphertext,
+    password
+  });
 }
 
 /**
