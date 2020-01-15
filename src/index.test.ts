@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import { decrypt, decryptObject, encrypt, encryptObject} from "./index";
-import { Encrypted } from "./types";
+import { EncryptedWithIv } from "./types";
 
 let mockKMS: any;
 
@@ -78,32 +78,45 @@ test("should be able to encrypt data and decrypt the same data", async () => {
     }
   );
 
-  const expectedEncryptedResult: Encrypted = {
+  const expectedEncryptedResult: EncryptedWithIv = {
     algorithm: "aes256",
     keyCiphertext: keyCiphertext as unknown as Buffer,
     dataCiphertext: expect.any(Buffer),
+    iv: expect.any(Buffer),
   };
 
   expect(encrypted).toEqual(expectedEncryptedResult);
   initializeMockKmsDecrypt(keyCiphertext);
 
-  const decrypted = await decryptObject({
+  const decrypted = await decrypt({
     algorithm: "aes256",
     keyCiphertext: encrypted.keyCiphertext,
     dataCiphertext: encrypted.dataCiphertext,
+    iv: encrypted.iv as Buffer
   });
 
-  expect(decrypted).toEqual({
+  expect(decrypted.toString("utf8")).toEqual(JSON.stringify({
     a: "b",
-  })
+  }));
+
+  const decryptedObject = await decryptObject({
+    algorithm: "aes256",
+    keyCiphertext: encrypted.keyCiphertext,
+    dataCiphertext: encrypted.dataCiphertext,
+    iv: encrypted.iv as Buffer
+  });
+
+  expect(decryptedObject).toEqual({
+    a: "b",
+  });
 });
 
 test("should be able to encrypt an object and decrypt the same object", async () => {
-  const keyCiphertext = Buffer.from("hello");
+  const keyCiphertext = getKeyCipherText();
 
   const generateDataKeyStub = jest.fn().mockResolvedValue({
     CiphertextBlob: keyCiphertext,
-    Plaintext: Buffer.from("world"),
+    Plaintext: keyCiphertext,
   });
 
   mockKMS = {
@@ -120,13 +133,26 @@ test("should be able to encrypt an object and decrypt the same object", async ()
     }
   );
 
-  const expectedEncryptedResult: Encrypted = {
+  const expectedEncryptedResult: EncryptedWithIv = {
     algorithm: "aes256",
-    keyCiphertext,
+    keyCiphertext: keyCiphertext as unknown as Buffer,
     dataCiphertext: expect.any(Buffer),
+    iv: expect.any(Buffer)
   };
 
   expect(encrypted).toEqual(expectedEncryptedResult);
+  initializeMockKmsDecrypt(keyCiphertext);
+
+  const decrypted = await decryptObject({
+    algorithm: "aes256",
+    keyCiphertext: encrypted.keyCiphertext,
+    dataCiphertext: encrypted.dataCiphertext,
+    iv: encrypted.iv as Buffer
+  });
+
+  expect(decrypted).toEqual({
+    a: "b",
+  });
 });
 
 test("should be able to decrypt to a buffer", async () => {

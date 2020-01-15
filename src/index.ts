@@ -1,14 +1,23 @@
 import { KMS } from "aws-sdk";
 import * as crypto from "crypto";
-import { pbkdf2Async } from './crypto';
-import { Encrypted, EncryptObjectRequest, EncryptRequest } from "./types";
+import { Encrypted, EncryptedWithIv, EncryptObjectRequest, EncryptRequest } from "./types";
 
 export * from './types';
 
 interface DecryptUsingTargetedDecipherMethodParams {
   algorithm: string;
   password: string;
-  dataCiphertext: Buffer
+  dataCiphertext: Buffer;
+  iv?: Buffer;
+}
+
+interface DecryptParams extends Encrypted {
+  iv?: Buffer;
+}
+
+interface GenerateDataKeyResponse {
+  keyCiphertext: Buffer;
+  password: string;
 }
 
 const INITIALIZATION_VECTOR_SIZE = 16;
@@ -23,28 +32,51 @@ const INITIALIZATION_VECTOR_SIZE = 16;
 async function decryptUsingTargetedDecipherMethod (
   params: DecryptUsingTargetedDecipherMethodParams
 ) {
-  const { algorithm, password, dataCiphertext } = params;
-  const charIndexAfterInitializationVector = INITIALIZATION_VECTOR_SIZE + 1;
+  const { algorithm, password, dataCiphertext, iv } = params;
+  let decipher: crypto.Decipher;
 
-  if (dataCiphertext.slice(INITIALIZATION_VECTOR_SIZE, charIndexAfterInitializationVector).toString() === ':') {
-    const initializationVector = dataCiphertext.slice(0, INITIALIZATION_VECTOR_SIZE);
-
-    const toDecipher = await pbkdf2Async(password, initializationVector);
-    const decipher = crypto.createDecipheriv(algorithm, toDecipher, initializationVector);
-
-    return Buffer.concat([
-      decipher.update(dataCiphertext.slice(charIndexAfterInitializationVector)),
-      decipher.final()
-    ]);
+  if (iv) {
+    decipher = crypto.createDecipheriv(algorithm, password, iv);
   } else {
-    /* tslint:disable-next-line:deprecation */
-    const decipher = crypto.createDecipher(algorithm, password);
-
-    return Buffer.concat([
-      decipher.update(dataCiphertext),
-      decipher.final()
-    ]);
+    decipher = crypto.createDecipher(algorithm, password);
   }
+
+  return Buffer.concat([
+    decipher.update(dataCiphertext),
+    decipher.final()
+  ]);
+}
+
+function getDataCipherTextFromCipher (
+  cipher: crypto.Cipher,
+  encryptRequest: EncryptRequest
+) {
+  return Buffer.concat([
+    cipher.update(encryptRequest.data),
+    cipher.final(),
+  ]);
+}
+
+async function generateDataKey (
+  encryptRequest: EncryptRequest,
+  config?: KMS.Types.ClientConfiguration,
+): Promise<GenerateDataKeyResponse> {
+  const kms = new KMS(config);
+
+  const dataKeyResponse = await kms
+    .generateDataKey({
+      KeyId: encryptRequest.kmsKeyId,
+      KeySpec: "AES_256",
+    })
+    .promise();
+
+  const keyCiphertext = dataKeyResponse.CiphertextBlob as Buffer;
+  const password = dataKeyResponse.Plaintext as string;
+
+  return {
+    keyCiphertext,
+    password
+  };
 }
 
 /**
@@ -55,35 +87,19 @@ async function decryptUsingTargetedDecipherMethod (
 export async function encrypt(
   encryptRequest: EncryptRequest,
   config?: KMS.Types.ClientConfiguration,
-): Promise<Encrypted> {
-  const kms = new KMS(config);
-  const { kmsKeyId, algorithm } = encryptRequest;
+): Promise<EncryptedWithIv> {
+  const { algorithm } = encryptRequest;
+  const { keyCiphertext, password }= await generateDataKey(encryptRequest, config);
 
-  const dataKeyResponse = await kms
-    .generateDataKey({
-      KeyId: kmsKeyId,
-      KeySpec: "AES_256",
-    })
-    .promise();
-
-  const keyCiphertext = dataKeyResponse.CiphertextBlob as Buffer;
-  const password = dataKeyResponse.Plaintext as string;
-  const initializationVector = crypto.randomBytes(INITIALIZATION_VECTOR_SIZE);
-
-  const key = await pbkdf2Async(password, initializationVector);
-  const cipher = crypto.createCipheriv(algorithm, key, initializationVector);
-
-  const dataCiphertext = Buffer.concat([
-    initializationVector,
-    Buffer.from(':'),
-    cipher.update(Buffer.from(encryptRequest.data)),
-    cipher.final()
-  ]);
+  const iv = crypto.randomBytes(INITIALIZATION_VECTOR_SIZE);
+  const cipher = crypto.createCipheriv(algorithm, password, iv);
+  const dataCiphertext = getDataCipherTextFromCipher(cipher, encryptRequest);
 
   return {
     algorithm,
     keyCiphertext,
     dataCiphertext,
+    iv
   };
 }
 
@@ -112,7 +128,7 @@ export async function encryptObject(
  * @param encrypted
  */
 export async function decrypt(
-  encrypted: Encrypted,
+  encrypted: DecryptParams,
   config?: KMS.Types.ClientConfiguration,
 ): Promise<Buffer> {
   const kms = new KMS(config);
@@ -127,7 +143,8 @@ export async function decrypt(
   return decryptUsingTargetedDecipherMethod({
     algorithm: encrypted.algorithm,
     dataCiphertext: encrypted.dataCiphertext,
-    password
+    password,
+    iv: encrypted.iv
   });
 }
 
@@ -137,7 +154,7 @@ export async function decrypt(
  * @param encrypted
  */
 export async function decryptObject<T = any>(
-  encrypted: Encrypted,
+  encrypted: DecryptParams,
   config?: KMS.Types.ClientConfiguration,
 ) {
   const decrypted = await decrypt(encrypted, config);
