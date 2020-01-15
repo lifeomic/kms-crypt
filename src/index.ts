@@ -1,9 +1,83 @@
 import { KMS } from "aws-sdk";
 import * as crypto from "crypto";
-
-import { Encrypted, EncryptObjectRequest, EncryptRequest } from "./types";
+import { Encrypted, EncryptedWithIv, EncryptObjectRequest, EncryptRequest } from "./types";
 
 export * from './types';
+
+interface DecryptUsingTargetedDecipherMethodParams {
+  algorithm: string;
+  password: string;
+  dataCiphertext: Buffer;
+  iv?: Buffer;
+}
+
+interface DecryptParams extends Encrypted {
+  iv?: Buffer;
+}
+
+interface GenerateDataKeyResponse {
+  keyCiphertext: Buffer;
+  password: string;
+}
+
+const INITIALIZATION_VECTOR_SIZE = 16;
+
+/**
+ * Decrypts using `createDecipheriv` or `createDecipher` based on whether we
+ * detected an initialization vector. Allows for backwards compatibility in
+ * existing encrypted data.
+ *
+ * @param params {DecryptUsingTargetedDecipherMethodParams}
+ */
+async function decryptUsingTargetedDecipherMethod (
+  params: DecryptUsingTargetedDecipherMethodParams
+) {
+  const { algorithm, password, dataCiphertext, iv } = params;
+  let decipher: crypto.Decipher;
+
+  if (iv) {
+    decipher = crypto.createDecipheriv(algorithm, password, iv);
+  } else {
+    decipher = crypto.createDecipher(algorithm, password);
+  }
+
+  return Buffer.concat([
+    decipher.update(dataCiphertext),
+    decipher.final()
+  ]);
+}
+
+function getDataCipherTextFromCipher (
+  cipher: crypto.Cipher,
+  encryptRequest: EncryptRequest
+) {
+  return Buffer.concat([
+    cipher.update(encryptRequest.data),
+    cipher.final(),
+  ]);
+}
+
+async function generateDataKey (
+  encryptRequest: EncryptRequest,
+  config?: KMS.Types.ClientConfiguration,
+): Promise<GenerateDataKeyResponse> {
+  const kms = new KMS(config);
+
+  const dataKeyResponse = await kms
+    .generateDataKey({
+      KeyId: encryptRequest.kmsKeyId,
+      KeySpec: "AES_256",
+    })
+    .promise();
+
+  const keyCiphertext = dataKeyResponse.CiphertextBlob as Buffer;
+  const password = dataKeyResponse.Plaintext as string;
+
+  return {
+    keyCiphertext,
+    password
+  };
+}
 
 /**
  * Encrypts data using a KMS data encryption key
@@ -13,31 +87,19 @@ export * from './types';
 export async function encrypt(
   encryptRequest: EncryptRequest,
   config?: KMS.Types.ClientConfiguration,
-): Promise<Encrypted> {
-  const kms = new KMS(config);
-  const { kmsKeyId, algorithm } = encryptRequest;
+): Promise<EncryptedWithIv> {
+  const { algorithm } = encryptRequest;
+  const { keyCiphertext, password }= await generateDataKey(encryptRequest, config);
 
-  const dataKeyResponse = await kms
-    .generateDataKey({
-      KeyId: kmsKeyId,
-      KeySpec: "AES_256",
-    })
-    .promise();
-
-  const keyCiphertext = dataKeyResponse.CiphertextBlob as Buffer;
-  const password = dataKeyResponse.Plaintext as string;
-  /* tslint:disable-next-line:deprecation */
-  const cipher = crypto.createCipher(algorithm, password);
-
-  const dataCiphertext = Buffer.concat([
-    cipher.update(encryptRequest.data),
-    cipher.final(),
-  ]);
+  const iv = crypto.randomBytes(INITIALIZATION_VECTOR_SIZE);
+  const cipher = crypto.createCipheriv(algorithm, password, iv);
+  const dataCiphertext = getDataCipherTextFromCipher(cipher, encryptRequest);
 
   return {
     algorithm,
     keyCiphertext,
     dataCiphertext,
+    iv
   };
 }
 
@@ -66,7 +128,7 @@ export async function encryptObject(
  * @param encrypted
  */
 export async function decrypt(
-  encrypted: Encrypted,
+  encrypted: DecryptParams,
   config?: KMS.Types.ClientConfiguration,
 ): Promise<Buffer> {
   const kms = new KMS(config);
@@ -78,14 +140,12 @@ export async function decrypt(
 
   const password = decryptResponse.Plaintext as string;
 
-  // We'll be decrypting the data using the password
-  /* tslint:disable-next-line:deprecation */
-  const decipher = crypto.createDecipher(encrypted.algorithm, password);
-
-  return Buffer.concat([
-    decipher.update(encrypted.dataCiphertext),
-    decipher.final(),
-  ]);
+  return decryptUsingTargetedDecipherMethod({
+    algorithm: encrypted.algorithm,
+    dataCiphertext: encrypted.dataCiphertext,
+    password,
+    iv: encrypted.iv
+  });
 }
 
 /**
@@ -94,7 +154,7 @@ export async function decrypt(
  * @param encrypted
  */
 export async function decryptObject<T = any>(
-  encrypted: Encrypted,
+  encrypted: DecryptParams,
   config?: KMS.Types.ClientConfiguration,
 ) {
   const decrypted = await decrypt(encrypted, config);

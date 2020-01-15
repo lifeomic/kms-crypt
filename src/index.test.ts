@@ -1,6 +1,6 @@
-import { encrypt, decrypt, encryptObject, decryptObject } from "./index";
-
-import { EncryptRequest, EncryptObjectRequest, Encrypted } from "./types";
+import * as crypto from 'crypto';
+import { decrypt, decryptObject, encrypt, encryptObject} from "./index";
+import { EncryptedWithIv } from "./types";
 
 let mockKMS: any;
 
@@ -10,7 +10,7 @@ jest.mock('aws-sdk', () => {
       return mockKMS;
     })
   }
-})
+});
 
 // Data cipher text that resolves to: { a: 'b' }
 const validDataCipherText = Buffer.from([
@@ -38,16 +38,32 @@ function createAwsPromiseReturnStub(promiseStub: any) {
   });
 }
 
+function initializeMockKmsDecrypt (plainTextKey: string | Buffer) {
+  const decryptStub = jest.fn().mockResolvedValue({
+    Plaintext: plainTextKey
+  });
+
+  mockKMS = {
+    decrypt: createAwsPromiseReturnStub(decryptStub),
+  };
+
+  return mockKMS;
+}
+
+function getKeyCipherText () {
+  return crypto.randomBytes(32 / 2).toString('hex');
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
 });
 
-test("should be able to encrypt data", async () => {
-  const keyCiphertext = Buffer.from("hello");
+test("should be able to encrypt data and decrypt the same data", async () => {
+  const keyCiphertext = getKeyCipherText();
 
   const generateDataKeyStub = jest.fn().mockResolvedValue({
     CiphertextBlob: keyCiphertext,
-    Plaintext: Buffer.from("world"),
+    Plaintext: keyCiphertext,
   });
 
   mockKMS = {
@@ -59,22 +75,48 @@ test("should be able to encrypt data", async () => {
       algorithm: "aes256",
       kmsKeyId: "abc",
       data: Buffer.from(JSON.stringify({ a: "b" })),
-    } as EncryptRequest,
+    }
   );
 
-  expect(encrypted).toEqual({
+  const expectedEncryptedResult: EncryptedWithIv = {
     algorithm: "aes256",
-    keyCiphertext,
-    dataCiphertext: validDataCipherText,
-  } as Encrypted);
+    keyCiphertext: keyCiphertext as unknown as Buffer,
+    dataCiphertext: expect.any(Buffer),
+    iv: expect.any(Buffer),
+  };
+
+  expect(encrypted).toEqual(expectedEncryptedResult);
+  initializeMockKmsDecrypt(keyCiphertext);
+
+  const decrypted = await decrypt({
+    algorithm: "aes256",
+    keyCiphertext: encrypted.keyCiphertext,
+    dataCiphertext: encrypted.dataCiphertext,
+    iv: encrypted.iv as Buffer
+  });
+
+  expect(decrypted.toString("utf8")).toEqual(JSON.stringify({
+    a: "b",
+  }));
+
+  const decryptedObject = await decryptObject({
+    algorithm: "aes256",
+    keyCiphertext: encrypted.keyCiphertext,
+    dataCiphertext: encrypted.dataCiphertext,
+    iv: encrypted.iv as Buffer
+  });
+
+  expect(decryptedObject).toEqual({
+    a: "b",
+  });
 });
 
-test("should be able to encrypt an object", async () => {
-  const keyCiphertext = Buffer.from("hello");
+test("should be able to encrypt an object and decrypt the same object", async () => {
+  const keyCiphertext = getKeyCipherText();
 
   const generateDataKeyStub = jest.fn().mockResolvedValue({
     CiphertextBlob: keyCiphertext,
-    Plaintext: Buffer.from("world"),
+    Plaintext: keyCiphertext,
   });
 
   mockKMS = {
@@ -88,26 +130,34 @@ test("should be able to encrypt an object", async () => {
       data: {
         a: "b",
       },
-    } as EncryptObjectRequest,
+    }
   );
 
-  expect(encrypted).toEqual({
+  const expectedEncryptedResult: EncryptedWithIv = {
     algorithm: "aes256",
-    keyCiphertext,
-    dataCiphertext: validDataCipherText,
-  } as Encrypted);
+    keyCiphertext: keyCiphertext as unknown as Buffer,
+    dataCiphertext: expect.any(Buffer),
+    iv: expect.any(Buffer)
+  };
+
+  expect(encrypted).toEqual(expectedEncryptedResult);
+  initializeMockKmsDecrypt(keyCiphertext);
+
+  const decrypted = await decryptObject({
+    algorithm: "aes256",
+    keyCiphertext: encrypted.keyCiphertext,
+    dataCiphertext: encrypted.dataCiphertext,
+    iv: encrypted.iv as Buffer
+  });
+
+  expect(decrypted).toEqual({
+    a: "b",
+  });
 });
 
 test("should be able to decrypt to a buffer", async () => {
   const keyCiphertext = Buffer.from("hello");
-
-  const decryptStub = jest.fn().mockResolvedValue({
-    Plaintext: Buffer.from("world"),
-  });
-
-  mockKMS = {
-    decrypt: createAwsPromiseReturnStub(decryptStub),
-  };
+  initializeMockKmsDecrypt(Buffer.from("world"));
 
   const decrypted = await decrypt({
     algorithm: "aes256",
@@ -123,14 +173,7 @@ test("should be able to decrypt to a buffer", async () => {
 
 test("should be able to decrypt an object", async () => {
   const keyCiphertext = Buffer.from("hello");
-
-  const decryptStub = jest.fn().mockResolvedValue({
-    Plaintext: Buffer.from("world"),
-  });
-
-  mockKMS = {
-    decrypt: createAwsPromiseReturnStub(decryptStub),
-  };
+  initializeMockKmsDecrypt(Buffer.from("world"));
 
   const decrypted = await decryptObject({
     algorithm: "aes256",

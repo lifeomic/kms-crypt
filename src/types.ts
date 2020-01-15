@@ -15,3 +15,7 @@ export interface Encrypted {
   keyCiphertext: Buffer;
   dataCiphertext: Buffer;
 }
+
+export interface EncryptedWithIv extends Encrypted {
+  iv: Buffer;
+}
